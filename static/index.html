@@ -3,118 +3,267 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CloudStreamer | Personal Media Cloud</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Cloud Streamer | Personal</title>
+    <!-- HLS.js Library -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0a0a0a; color: white; }
-        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .emerald-glow { box-shadow: 0 0 20px rgba(16, 185, 129, 0.2); }
+        :root {
+            --bg-color: #0a0a0a;
+            --card-bg: #141414;
+            --primary-color: #10b981; /* Emerald Green */
+            --text-color: #ffffff;
+            --text-muted: #94a3b8;
+            --border-color: #262626;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1000px;
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        @media (max-width: 850px) {
+            .container { grid-template-columns: 1fr; }
+        }
+
+        /* Video Player Area */
+        .player-section {
+            background: black;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            aspect-ratio: 16 / 9;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            text-align: center;
+            z-index: 10;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: var(--primary-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Sidebar / Config Area */
+        .config-card {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h2 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+
+        .input-group { display: flex; flex-direction: column; gap: 8px; }
+
+        label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+
+        input, select {
+            background: #000;
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        input:focus { border-color: var(--primary-color); }
+
+        .btn-start {
+            background: var(--primary-color);
+            color: #000;
+            font-weight: 700;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-start:hover { opacity: 0.9; }
+        .btn-start:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+        .status-msg {
+            font-size: 13px;
+            color: var(--text-muted);
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        .error-msg { color: #ef4444; }
     </style>
 </head>
-<body class="min-h-screen flex flex-col">
-    <header class="border-b border-white/5 bg-black/20 backdrop-blur-xl sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                    <svg class="text-black w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                </div>
-                <div>
-                    <h1 class="font-bold text-lg tracking-tight">CloudStreamer</h1>
-                    <p class="text-[10px] uppercase tracking-widest text-emerald-500 font-bold opacity-80">Python Engine</p>
-                </div>
-            </div>
-        </div>
-    </header>
+<body>
 
-    <main class="flex-grow max-w-7xl mx-auto px-6 py-12 w-full">
-        <div class="grid lg:grid-cols-[1fr_380px] gap-12">
-            <div class="space-y-6">
-                <div class="aspect-video bg-black rounded-3xl overflow-hidden border border-white/5 shadow-2xl relative">
-                    <video id="video" controls class="w-full h-full object-contain"></video>
-                    <div id="loader" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-10">
-                        <div class="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p class="text-emerald-500 font-bold tracking-widest uppercase text-[10px]">Extracting Stream...</p>
-                    </div>
-                </div>
+    <div class="container">
+        <!-- Video Section -->
+        <div class="player-section" id="playerSection">
+            <div id="loadingUI" style="display: none;" class="loading-overlay">
+                <div class="spinner"></div>
+                <div id="statusText" style="font-size: 12px; color: var(--primary-color); font-weight: bold; letter-spacing: 1px; text-transform: uppercase;">Initializing...</div>
+            </div>
+            <video id="videoPlayer" controls playsinline></video>
+        </div>
+
+        <!-- Configuration Sidebar -->
+        <div class="config-card">
+            <h2>Configuration</h2>
+            
+            <div class="input-group">
+                <label>Video Source URL</label>
+                <input type="text" id="videoUrl" placeholder="Paste YouTube or Direct Link...">
             </div>
 
-            <div class="space-y-8">
-                <div class="glass p-6 rounded-3xl space-y-4">
-                    <h2 class="text-xs font-bold uppercase tracking-widest text-white/40">Configuration</h2>
-                    <div class="space-y-4">
-                        <div class="space-y-2">
-                            <label class="text-[10px] uppercase tracking-widest font-bold text-white/40 ml-1">Video Source URL</label>
-                            <input id="urlInput" type="text" placeholder="YouTube, Twitch, Vimeo..." class="w-full bg-black border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors placeholder:text-white/10">
-                        </div>
-                        <div class="space-y-2">
-                            <label class="text-[10px] uppercase tracking-widest font-bold text-white/40 ml-1">Quality</label>
-                            <select id="qualitySelect" class="w-full bg-black border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors">
-                                <option value="best">Best Available</option>
-                                <option value="720p">720p</option>
-                                <option value="480p">480p</option>
-                                <option value="360p">360p</option>
-                            </select>
-                        </div>
-                        <button id="playBtn" class="w-full bg-white text-black font-bold py-4 rounded-2xl flex items-center justify-center gap-3 hover:bg-emerald-500 transition-all">
-                            Initialize Stream
-                        </button>
-                    </div>
-                </div>
+            <div class="input-group">
+                <label>Quality</label>
+                <select id="quality">
+                    <option value="best">Best Available</option>
+                    <option value="1080">1080p</option>
+                    <option value="720">720p</option>
+                    <option value="480">480p</option>
+                    <option value="360">360p</option>
+                </select>
             </div>
+
+            <button class="btn-start" id="startBtn">Initialize Stream</button>
+            <div id="logOutput" class="status-msg">Ready to stream.</div>
         </div>
-    </main>
+    </div>
 
     <script>
-        const video = document.getElementById('video');
-        const urlInput = document.getElementById('urlInput');
-        const qualitySelect = document.getElementById('qualitySelect');
-        const playBtn = document.getElementById('playBtn');
-        const loader = document.getElementById('loader');
+        const video = document.getElementById('videoPlayer');
+        const startBtn = document.getElementById('startBtn');
+        const videoUrlInput = document.getElementById('videoUrl');
+        const qualitySelect = document.getElementById('quality');
+        const logOutput = document.getElementById('logOutput');
+        const loadingUI = document.getElementById('loadingUI');
+        const statusText = document.getElementById('statusText');
+
         let hls = null;
 
-        playBtn.addEventListener('click', async () => {
-            const url = urlInput.value;
-            if (!url) return;
+        startBtn.onclick = async () => {
+            const url = videoUrlInput.value.trim();
+            const quality = qualitySelect.value;
 
-            loader.classList.remove('hidden');
-            playBtn.disabled = true;
+            if (!url) {
+                alert("Please paste a video URL first.");
+                return;
+            }
+
+            // UI Reset
+            if (hls) { hls.destroy(); }
+            video.pause();
+            video.src = "";
+            
+            startBtn.disabled = true;
+            loadingUI.style.display = 'block';
+            logOutput.classList.remove('error-msg');
+            logOutput.innerText = "Connecting to cloud server...";
 
             try {
                 const response = await fetch('/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, quality: qualitySelect.value })
+                    body: JSON.stringify({ url: url, quality: quality })
                 });
 
                 const data = await response.json();
-                if (data.error) throw new Error(data.error);
 
-                if (Hls.isSupported()) {
-                    if (hls) hls.destroy();
-                    hls = new Hls();
-                    hls.loadSource(data.streamUrl);
-                    hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                        video.play();
-                        loader.classList.add('hidden');
-                        playBtn.disabled = false;
-                    });
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = data.streamUrl;
-                    video.addEventListener('loadedmetadata', () => {
-                        video.play();
-                        loader.classList.add('hidden');
-                        playBtn.disabled = false;
-                    });
+                if (response.ok && data.playlist_url) {
+                    logOutput.innerText = "Manifest found. Loading segments...";
+                    loadHlsStream(data.playlist_url);
+                } else {
+                    throw new Error(data.detail || "Server failed to process video.");
                 }
             } catch (err) {
-                alert('Error: ' + err.message);
-                loader.classList.add('hidden');
-                playBtn.disabled = false;
+                console.error(err);
+                logOutput.innerText = "Error: " + err.message;
+                logOutput.classList.add('error-msg');
+                loadingUI.style.display = 'none';
+                startBtn.disabled = false;
             }
-        });
+        };
+
+        function loadHlsStream(streamUrl) {
+            // Add a cache-buster to prevent loading old stream segments
+            const finalUrl = streamUrl + "?t=" + Date.now();
+
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    lowLatencyMode: true,
+                    backBufferLength: 60
+                });
+                hls.loadSource(finalUrl);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    loadingUI.style.display = 'none';
+                    video.play();
+                    logOutput.innerText = "Stream Live";
+                    startBtn.disabled = false;
+                });
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        console.error("HLS Fatal Error:", data);
+                        logOutput.innerText = "Stream Error: " + data.type;
+                        logOutput.classList.add('error-msg');
+                    }
+                });
+            } 
+            else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Support for Safari (iOS/Mac)
+                video.src = finalUrl;
+                video.addEventListener('loadedmetadata', () => {
+                    loadingUI.style.display = 'none';
+                    video.play();
+                    logOutput.innerText = "Stream Live (Native)";
+                    startBtn.disabled = false;
+                });
+            } else {
+                alert("Your browser does not support HLS streaming.");
+            }
+        }
     </script>
 </body>
 </html>
