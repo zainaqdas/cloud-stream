@@ -47,21 +47,30 @@ async def start_stream(req: StreamRequest):
     os.makedirs(output_dir, exist_ok=True)
     m3u8_path = os.path.join(output_dir, "playlist.m3u8")
 
-    try:
-        # FIX: We use the installed library, not a local binary in 'bin/'
-        ydl_opts = {
-            'format': f'bestvideo[height<={req.quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={req.quality}]',
-            'quiet': True,
-            'no_warnings': True,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=False)
-            video_url = info.get('url')
+    video_url = req.url
+    
+    # Check if it's a direct file link (ends in .mp4, .m4v, etc)
+    is_direct_link = any(ext in req.url.lower() for ext in [".mp4", ".m4v", ".mkv", ".mov", ".avi"])
 
-        # Run ffmpeg (Railway has this in the system path via nixpacks)
+    try:
+        if not is_direct_link:
+            print(f"Extracting Platform Link: {req.url}")
+            ydl_opts = {
+                'format': f'bestvideo[height<={req.quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={req.quality}]',
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(req.url, download=False)
+                video_url = info.get('url')
+        else:
+            print(f"Using Direct Link: {req.url}")
+
+        # FFmpeg command optimized for stability
         ffmpeg_cmd = [
-            "ffmpeg", "-i", video_url,
+            "ffmpeg", 
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", # Handle network drops
+            "-i", video_url,
             "-c", "copy", 
             "-start_number", "0",
             "-hls_time", "6",
@@ -70,18 +79,22 @@ async def start_stream(req: StreamRequest):
             "-f", "hls", m3u8_path
         ]
 
+        # Start FFmpeg
         subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Wait for manifest creation
-        for _ in range(15):
+        # Wait up to 20 seconds for the first segments to appear
+        for i in range(20):
             if os.path.exists(m3u8_path):
+                print(f"Stream started successfully: {stream_id}")
                 return {"stream_id": stream_id, "playlist_url": f"/streams/{stream_id}/playlist.m3u8"}
             time.sleep(1)
 
-        raise HTTPException(status_code=500, detail="FFmpeg failed to generate stream")
+        raise Exception("FFmpeg timed out waiting for stream segments")
 
     except Exception as e:
+        print(f"Error starting stream: {str(e)}")
         if os.path.exists(output_dir): shutil.rmtree(output_dir)
+        # Return the actual error message so we can see it in logs
         raise HTTPException(status_code=400, detail=str(e))
 
 app.mount("/streams", StaticFiles(directory=STREAMS_DIR), name="streams")
@@ -89,5 +102,6 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
+    # Railway environment check
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
