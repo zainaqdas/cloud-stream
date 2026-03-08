@@ -1,133 +1,93 @@
 import os
 import uuid
 import subprocess
-import shutil
 import time
+import shutil
 import threading
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+import yt_dlp
 
 app = FastAPI()
 
-# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Directories
 STREAMS_DIR = "streams"
-STATIC_DIR = "static"
-BIN_DIR = "bin"
-YTDLP_PATH = os.path.join(BIN_DIR, "yt-dlp")
-
 os.makedirs(STREAMS_DIR, exist_ok=True)
-os.makedirs(STATIC_DIR, exist_ok=True)
-os.makedirs(BIN_DIR, exist_ok=True)
-
-# Active processes storage
-active_processes = {}
 
 class StreamRequest(BaseModel):
     url: str
-    quality: Optional[str] = "best"
+    quality: str = "720"
+
+def cleanup_old_streams():
+    while True:
+        try:
+            now = time.time()
+            for folder in os.listdir(STREAMS_DIR):
+                folder_path = os.path.join(STREAMS_DIR, folder)
+                if os.path.isdir(folder_path):
+                    if now - os.path.getmtime(folder_path) > 3600:
+                        shutil.rmtree(folder_path)
+        except: pass
+        time.sleep(600)
+
+threading.Thread(target=cleanup_old_streams, daemon=True).start()
 
 @app.post("/start")
-async def start_stream(request: StreamRequest):
-    url = request.url
-    quality = request.quality
-
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-
+async def start_stream(req: StreamRequest):
     stream_id = str(uuid.uuid4())
-    stream_folder = os.path.join(STREAMS_DIR, stream_id)
-    os.makedirs(stream_folder, exist_ok=True)
-    
-    m3u8_path = os.path.join(stream_folder, "index.m3u8")
+    output_dir = os.path.join(STREAMS_DIR, stream_id)
+    os.makedirs(output_dir, exist_ok=True)
+    m3u8_path = os.path.join(output_dir, "playlist.m3u8")
 
     try:
-        # 1. Extract direct URL using yt-dlp
-        format_selector = "best"
-        if quality == "720p":
-            format_selector = "bestvideo[height<=720]+bestaudio/best[height<=720]"
-        elif quality == "480p":
-            format_selector = "bestvideo[height<=480]+bestaudio/best[height<=480]"
-        elif quality == "360p":
-            format_selector = "bestvideo[height<=360]+bestaudio/best[height<=360]"
-
-        print(f"Extracting: {url} with quality {quality}")
+        # FIX: We use the installed library, not a local binary in 'bin/'
+        ydl_opts = {
+            'format': f'bestvideo[height<={req.quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={req.quality}]',
+            'quiet': True,
+            'no_warnings': True,
+        }
         
-        # Use the binary we downloaded in build.sh
-        cmd_ytdlp = [YTDLP_PATH, "-g", "-f", format_selector, url]
-        result = subprocess.run(cmd_ytdlp, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            raise Exception(f"yt-dlp error: {result.stderr}")
-            
-        direct_url = result.stdout.strip().split('\n')[0]
-        print(f"Direct URL: {direct_url[:50]}...")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(req.url, download=False)
+            video_url = info.get('url')
 
-        # 2. Start FFmpeg conversion
-        # -hls_flags delete_segments: auto-deletes old segments
-        # -hls_list_size 6: keeps only 6 segments in the playlist
-        cmd_ffmpeg = [
-            "ffmpeg", "-i", direct_url,
-            "-profile:v", "baseline", "-level", "3.0",
-            "-start_number", "0", "-hls_time", "10", "-hls_list_size", "6",
+        # Run ffmpeg (Railway has this in the system path via nixpacks)
+        ffmpeg_cmd = [
+            "ffmpeg", "-i", video_url,
+            "-c", "copy", 
+            "-start_number", "0",
+            "-hls_time", "6",
+            "-hls_list_size", "10",
             "-hls_flags", "delete_segments",
             "-f", "hls", m3u8_path
         ]
-        
-        process = subprocess.Popen(cmd_ffmpeg, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        active_processes[stream_id] = process
 
-        return {
-            "streamUrl": f"/streams/{stream_id}/index.m3u8",
-            "streamId": stream_id
-        }
+        subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Wait for manifest creation
+        for _ in range(15):
+            if os.path.exists(m3u8_path):
+                return {"stream_id": stream_id, "playlist_url": f"/streams/{stream_id}/playlist.m3u8"}
+            time.sleep(1)
+
+        raise HTTPException(status_code=500, detail="FFmpeg failed to generate stream")
 
     except Exception as e:
-        print(f"Error: {str(e)}")
-        if os.path.exists(stream_folder):
-            shutil.rmtree(stream_folder)
-        raise HTTPException(status_code=500, detail=str(e))
+        if os.path.exists(output_dir): shutil.rmtree(output_dir)
+        raise HTTPException(status_code=400, detail=str(e))
 
-# Cleanup Task
-def cleanup_old_streams():
-    while True:
-        time.sleep(600) # Run every 10 minutes
-        now = time.time()
-        one_hour = 3600
-        
-        if not os.path.exists(STREAMS_DIR):
-            continue
-            
-        for folder in os.listdir(STREAMS_DIR):
-            folder_path = os.path.join(STREAMS_DIR, folder)
-            if os.path.isdir(folder_path):
-                if now - os.path.getmtime(folder_path) > one_hour:
-                    print(f"Cleaning up {folder}")
-                    if folder in active_processes:
-                        active_processes[folder].terminate()
-                        del active_processes[folder]
-                    shutil.rmtree(folder_path, ignore_errors=True)
-
-# Start cleanup thread
-cleanup_thread = threading.Thread(target=cleanup_old_streams, daemon=True)
-cleanup_thread.start()
-
-# Serve static files
 app.mount("/streams", StaticFiles(directory=STREAMS_DIR), name="streams")
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 3000))
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
