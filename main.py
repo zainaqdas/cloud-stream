@@ -4,6 +4,7 @@ import subprocess
 import time
 import shutil
 import threading
+import shutil # To find ffmpeg path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,22 @@ os.makedirs(STREAMS_DIR, exist_ok=True)
 class StreamRequest(BaseModel):
     url: str
     quality: str = "720"
+
+# --- HELPER TO FIND FFMPEG ---
+def get_ffmpeg_path():
+    # Try to find ffmpeg in the system path
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    # Common Railway/Nixpacks paths if which fails
+    possible_paths = ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"]
+    for p in possible_paths:
+        if os.path.exists(p):
+            return p
+    return "ffmpeg" # Fallback to string and hope for the best
+
+FFMPEG_BIN = get_ffmpeg_path()
+print(f"--- SYSTEM INFO: FFMPEG located at: {FFMPEG_BIN} ---")
 
 def cleanup_old_streams():
     while True:
@@ -48,13 +65,10 @@ async def start_stream(req: StreamRequest):
     m3u8_path = os.path.join(output_dir, "playlist.m3u8")
 
     video_url = req.url
-    
-    # Check if it's a direct file link (ends in .mp4, .m4v, etc)
     is_direct_link = any(ext in req.url.lower() for ext in [".mp4", ".m4v", ".mkv", ".mov", ".avi"])
 
     try:
         if not is_direct_link:
-            print(f"Extracting Platform Link: {req.url}")
             ydl_opts = {
                 'format': f'bestvideo[height<={req.quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={req.quality}]',
                 'quiet': True,
@@ -63,13 +77,10 @@ async def start_stream(req: StreamRequest):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(req.url, download=False)
                 video_url = info.get('url')
-        else:
-            print(f"Using Direct Link: {req.url}")
 
-        # FFmpeg command optimized for stability
         ffmpeg_cmd = [
-            "ffmpeg", 
-            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", # Handle network drops
+            FFMPEG_BIN, # Use the path we found
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-i", video_url,
             "-c", "copy", 
             "-start_number", "0",
@@ -79,22 +90,17 @@ async def start_stream(req: StreamRequest):
             "-f", "hls", m3u8_path
         ]
 
-        # Start FFmpeg
         subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Wait up to 20 seconds for the first segments to appear
-        for i in range(20):
+        for i in range(25): # Slightly longer wait for slow links
             if os.path.exists(m3u8_path):
-                print(f"Stream started successfully: {stream_id}")
                 return {"stream_id": stream_id, "playlist_url": f"/streams/{stream_id}/playlist.m3u8"}
             time.sleep(1)
 
-        raise Exception("FFmpeg timed out waiting for stream segments")
+        raise Exception("FFmpeg timed out. Check if the link is valid and accessible.")
 
     except Exception as e:
-        print(f"Error starting stream: {str(e)}")
         if os.path.exists(output_dir): shutil.rmtree(output_dir)
-        # Return the actual error message so we can see it in logs
         raise HTTPException(status_code=400, detail=str(e))
 
 app.mount("/streams", StaticFiles(directory=STREAMS_DIR), name="streams")
@@ -102,6 +108,5 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    # Railway environment check
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
