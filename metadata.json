@@ -1,0 +1,5 @@
+{
+  "name": "CloudStreamer",
+  "description": "Personal cloud video streaming project with on-the-fly HLS conversion using yt-dlp and ffmpeg.",
+  "requestFramePermissions": []
+}
