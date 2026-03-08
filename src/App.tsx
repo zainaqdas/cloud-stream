@@ -19,7 +19,7 @@ export default function App() {
     setStreamUrl(null);
 
     try {
-      const response = await fetch('/api/start', {
+      const response = await fetch('/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, quality }),

@@ -41,7 +41,7 @@ app.use('/streams', express.static(STREAMS_DIR));
 // Keep track of active ffmpeg processes
 const activeProcesses = new Map<string, any>();
 
-app.post('/api/start', async (req, res) => {
+app.post('/start', async (req, res) => {
   const { url, quality = 'best' } = req.body;
 
   if (!url) {
